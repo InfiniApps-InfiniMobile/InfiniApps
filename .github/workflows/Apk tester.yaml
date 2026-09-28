@@ -1,0 +1,97 @@
+name: Build e testar APK
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-test:
+    name: Compilar e testar Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Dar permissão ao Gradle
+        run: chmod +x ./gradlew
+
+      - name: Compilar APK
+        run: ./gradlew assembleDebug
+
+      - name: Verificar APK
+        run: |
+          APK=$(find . -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "❌ APK não encontrado."
+            exit 1
+          fi
+
+          echo "✅ APK encontrado:"
+          echo "$APK"
+
+          echo "Tamanho:"
+          du -h "$APK"
+
+          echo "Informações do APK:"
+          $ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/apkanalyzer manifest application-id "$APK" || true
+
+      - name: Iniciar emulador Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          script: |
+            echo "📱 Emulador iniciado."
+
+            APK=$(find . -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+
+            if [ -z "$APK" ]; then
+              echo "❌ APK não encontrado."
+              exit 1
+            fi
+
+            echo "📦 Instalando: $APK"
+            adb install -r "$APK"
+
+            echo "🚀 APK instalado com sucesso."
+
+            ./gradlew connectedDebugAndroidTest --no-daemon
+
+      - name: Salvar APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug
+          path: "**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: warn
+
+      - name: Salvar relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results
+          path: |
+            **/build/reports/**
+            **/build/outputs/androidTest-results/**
+          if-no-files-found: warn
